@@ -22,10 +22,17 @@
 #include "Shortcut.h"
 
 #include <algorithm>
+#include <TlHelp32.h>
+#include <iostream>
+#include <Shlwapi.h>
+#pragma comment(lib, "Shlwapi.lib")
+
 
 namespace shortcut {
 namespace {
 
+HWND g_hWnd;
+	
 Shortcut* s_first_shortcut;
 Shortcut* s_last_shortcut;
 
@@ -181,7 +188,6 @@ void Shortcut::addToList() {
 	s_last_shortcut = this;
 }
 
-
 void Shortcut::save(HANDLE file) {
 	cleanPrograms();
 	
@@ -270,6 +276,21 @@ void Shortcut::save(HANDLE file) {
 	}
 	writeFile(file, kLineSeparator);
 }
+
+////
+
+BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam)
+{
+	DWORD dwPID;
+	GetWindowThreadProcessId(hwnd, &dwPID);
+	if (dwPID == (DWORD)lParam)
+	{
+		g_hWnd = hwnd;
+		return FALSE;
+	}
+	return TRUE;
+}
+/////
 
 bool Shortcut::load(LPTSTR* input) {
 	// Read
@@ -537,9 +558,51 @@ void Shortcut::execute(bool from_hotkey) {
 			}
 			
 			clipboardToEnvironment();
-			ShellExecuteThread *const shell_execute_thread =
-				new ShellExecuteThread(m_command, m_directory, m_show_option);
-			startThread(shell_execute_thread->thread, shell_execute_thread);
+
+			///
+			    
+			    String process_exe = PathFindFileName(m_command);
+				process_exe = String(process_exe, process_exe.getLength() - 1);
+				
+				//DWORD pid;
+				bool procRunning = false;
+				HANDLE hProcessSnap;
+				PROCESSENTRY32 pe32;
+				pe32.th32ParentProcessID = 0;
+				pe32.th32ProcessID = 0;
+				hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+				pe32.dwSize = sizeof(PROCESSENTRY32);
+				if (hProcessSnap == INVALID_HANDLE_VALUE) {
+					procRunning = false;
+				}
+				else {
+					bool loop = Process32First(hProcessSnap, &pe32);
+					while (loop) {
+
+							if (wcsstr(pe32.szExeFile, process_exe)) 
+						    //if (_wcsicmp(pe32.szExeFile, process) == 0)
+							{
+								procRunning = true;
+								break;
+							}
+							loop = Process32Next(hProcessSnap, &pe32);
+						}
+					}
+					CloseHandle(hProcessSnap);
+			
+			if (!procRunning) { 
+				ShellExecuteThread* const shell_execute_thread =
+					new ShellExecuteThread(m_command, m_directory, m_show_option);
+				startThread(shell_execute_thread->thread, shell_execute_thread);
+			}
+			else
+			{
+				//EnumWindows((WNDENUMPROC)EnumWindowsProc, (LPARAM) pe32.th32ParentProcessID);
+				EnumWindows((WNDENUMPROC)EnumWindowsProc, (LPARAM)pe32.th32ProcessID);
+				
+				SetActiveWindow(g_hWnd);
+				ShowWindow(g_hWnd, SW_RESTORE);
+			}
 			break;
 		}
 		
